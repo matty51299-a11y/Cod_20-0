@@ -52,6 +52,42 @@ const DIFFICULTIES = [
   { id: 'open', label: 'Open Bracket', sub: 'Auto-drafted squad · pure chaos', rerolls: 0, hidden: true, auto: true, weights: { elite: 1, strong: 2, mid: 4, weak: 4, disaster: 3 } },
 ];
 
+
+const CHAMPS_ROUNDS = ['Champs Round 1', 'Champs Semi Final', 'Champs Final', 'Champs Grand Final'];
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+function matchMeta(index) {
+  const matchNumber = index + 1;
+  if (index < 16) {
+    return {
+      matchNumber,
+      phase: 'regular',
+      phaseLabel: 'Regular Season',
+      roundLabel: `M${matchNumber} · Regular Season`,
+      nextLabel: `M${matchNumber} · Regular Season`,
+    };
+  }
+  const roundLabel = CHAMPS_ROUNDS[index - 16] || 'Champs';
+  return {
+    matchNumber,
+    phase: 'champs',
+    phaseLabel: 'Champs',
+    roundLabel,
+    nextLabel: roundLabel,
+  };
+}
+
+function recordFor(results) {
+  const wins = results.filter((r) => r.won).length;
+  return { wins, losses: results.length - wins };
+}
+
+function currentPhaseLabel(results) {
+  if (results.length === 0) return 'Regular Season';
+  if (results.length <= 16) return 'Regular Season';
+  return matchMeta(results.length - 1).roundLabel;
+}
+
 const rnd = (a, b) => a + Math.random() * (b - a);
 const ri = (a, b) => Math.floor(rnd(a, b + 1));
 const shuffle = (arr) => {
@@ -139,7 +175,55 @@ function simSeries(myRating, opp, coach, isBogey) {
     if (win) w++; else l++;
     maps.push({ m: m === 'hp' ? 'HP' : m === 'snd' ? 'SnD' : 'CTL', score, win });
   }
-  return { won: w === 3, w, l, maps, opp, isBogey };
+  return { won: w === 3, w, l, maps, opp, isBogey, opponentStrength: oppRating };
+}
+
+function kdRangeFor(player, result) {
+  const margin = Math.abs(result.w - result.l);
+  const tier = player.r >= 93 ? 'star' : player.r <= 87 ? 'weak' : 'normal';
+  if (result.won && margin >= 3) {
+    return { star: [1.15, 1.45], normal: [1.00, 1.25], weak: [0.90, 1.10] }[tier];
+  }
+  if (result.won) {
+    return { star: [1.05, 1.30], normal: [0.95, 1.15], weak: [0.85, 1.05] }[tier];
+  }
+  if (margin >= 3) {
+    return { star: [0.90, 1.10], normal: [0.75, 0.95], weak: [0.65, 0.85] }[tier];
+  }
+  return { star: [0.95, 1.20], normal: [0.85, 1.05], weak: [0.75, 0.95] }[tier];
+}
+
+function generatePlayerMatchStats(picks, result, opponentStrength) {
+  return picks.map((player) => {
+    const [min, max] = kdRangeFor(player, result);
+    const roleVolatility = player.role === 'SMG' ? 0.08 : player.role === 'AR' ? 0.035 : 0.055;
+    const ratingAdjustment = (player.r - 90) * 0.006;
+    const opponentAdjustment = (90 - opponentStrength) * 0.002;
+    const kd = clamp(rnd(min, max) + rnd(-roleVolatility, roleVolatility) + ratingAdjustment + opponentAdjustment, 0.6, 1.6);
+    return { name: player.n, kd: Number(kd.toFixed(2)) };
+  }).sort((a, b) => b.kd - a.kd);
+}
+
+function flavourForResult(result, previousResults) {
+  const withCurrent = [...previousResults, result];
+  const firstLoss = !result.won && previousResults.every((r) => r.won);
+  const threeStraightLosses = withCurrent.slice(-3).length === 3 && withCurrent.slice(-3).every((r) => !r.won);
+  const perfectStart = result.matchNumber === 3 && withCurrent.every((r) => r.won);
+
+  if (threeStraightLosses) return 'Three straight defeats. Crisis.';
+  if (firstLoss) return 'The perfect run is gone.';
+  if (perfectStart) return 'Perfect start.';
+  if (result.won && result.w === 3 && result.l === 0) return 'Statement win.';
+  if (result.won && result.w === 3 && result.l === 2) return 'Map five survived.';
+  if (!result.won && result.w === 0 && result.l === 3) return 'Humbled.';
+  return '';
+}
+
+function decorateResult(rawResult, picks, index, previousResults) {
+  const meta = matchMeta(index);
+  const playerStats = generatePlayerMatchStats(picks, rawResult, rawResult.opponentStrength);
+  const decorated = { ...rawResult, ...meta, playerStats };
+  return { ...decorated, flavour: flavourForResult(decorated, previousResults) };
 }
 
 function loadBest() {
@@ -301,29 +385,46 @@ function App() {
     setPhase('review');
   }
 
+  function buildMatchResult(index, previousResults, effectiveRating) {
+    const raw = simSeries(effectiveRating, fixtures[index], coach, index === bogeyIdx);
+    return decorateResult(raw, picks, index, previousResults);
+  }
+
   function playNext() {
     const i = results.length;
     if (i >= fixtures.length) return;
     const eff = teamEffective(picks, chem.total, coach);
-    const res = simSeries(eff, fixtures[i], coach, i === bogeyIdx);
+    const res = buildMatchResult(i, results, eff);
     const next = [...results, res];
     setResults(next);
     if (next.length === fixtures.length) endSeason(next);
   }
 
-  function simRest() {
+  function simThrough(targetCount) {
     setSimmingAll(true);
     const eff = teamEffective(picks, chem.total, coach);
     let next = [...results];
     let i = next.length;
     const step = () => {
-      if (i >= fixtures.length) { setSimmingAll(false); endSeason(next); return; }
-      next = [...next, simSeries(eff, fixtures[i], coach, i === bogeyIdx)];
+      if (i >= fixtures.length || i >= targetCount) {
+        setSimmingAll(false);
+        if (next.length === fixtures.length) endSeason(next);
+        return;
+      }
+      next = [...next, buildMatchResult(i, next, eff)];
       setResults(next);
       i++;
       setTimeout(step, 140);
     };
     step();
+  }
+
+  function simRest() {
+    simThrough(fixtures.length);
+  }
+
+  function simCurrentPhase() {
+    simThrough(results.length < 16 ? 16 : fixtures.length);
   }
 
   function endSeason(finalResults) {
@@ -356,6 +457,9 @@ function App() {
   const wins = results.filter((r) => r.won).length;
   const losses = results.length - wins;
   const undefeated = losses === 0;
+  const regularRecord = recordFor(results.slice(0, 16));
+  const champsRecord = recordFor(results.slice(16));
+  const phaseSimLabel = results.length < 16 ? 'Sim Regular Season' : 'Sim Champs';
 
   return (
     <div className="app-shell">
@@ -414,9 +518,15 @@ function App() {
 
         {phase === 'season' && (
           <div className="stack-md">
-            <div className="text-center"><div className={`record ${undefeated ? 'perfect' : ''}`}>{wins}–{losses}</div><div className={`eyebrow ${undefeated ? 'green' : ''}`}>{undefeated ? 'Still perfect' : 'The dream is dead — finish the job'}</div></div>
+            <SeasonHeader wins={wins} losses={losses} regularRecord={regularRecord} champsRecord={champsRecord} results={results} undefeated={undefeated} />
             <ResultsList results={results} fixtures={fixtures} />
-            {results.length < fixtures.length && <div className="grid-two"><Btn onClick={playNext} disabled={simmingAll}>Play next</Btn><Btn variant="secondary" onClick={simRest} disabled={simmingAll}>Sim rest</Btn></div>}
+            {results.length < fixtures.length && (
+              <div className="season-actions">
+                <Btn onClick={playNext} disabled={simmingAll}>Play next</Btn>
+                <Btn variant="secondary" onClick={simRest} disabled={simmingAll}>Sim rest</Btn>
+                <Btn variant="ghost" onClick={simCurrentPhase} disabled={simmingAll}>{phaseSimLabel}</Btn>
+              </div>
+            )}
           </div>
         )}
 
@@ -424,6 +534,7 @@ function App() {
           <div className="stack-lg text-center">
             <div><div className={`final-record ${losses === 0 ? 'perfect' : ''}`}>{wins}–{losses}</div><div className="result-label">{losses === 0 ? '20–0 · IMMORTAL' : results[19]?.won ? 'World Champions' : wins >= 16 ? 'Champs calibre — no ring' : wins >= 12 ? 'Playoff team' : wins >= 8 ? 'Mid-table' : 'Full rebuild'}</div>{results[19]?.won && losses > 0 && <p>You dropped maps along the way, but you won the one that matters.</p>}</div>
             <div className="result-grid">{results.map((r, i) => <span key={i}>{r.won ? '🟩' : '🟥'}</span>)}</div>
+            <div className="text-left"><div className="label">Season log</div><ResultsList results={results} fixtures={fixtures} /></div>
             <div className="panel text-left"><div className="label">Season review</div><div className="review-copy"><div>Squad: {picks.map((p) => `${p.n} '${String(p.year).slice(2)}`).join(', ')}</div><div>Coach: {coach.n} — “{coach.t}”</div><div>Bogey team: <b>{fixtures[bogeyIdx]?.org} '{String(fixtures[bogeyIdx]?.year).slice(2)}</b>{results[bogeyIdx] && !results[bogeyIdx].won ? ' — and they got you.' : ' — handled.'}</div>{best && <div>Best ever run: {best.wins}–{best.losses}</div>}</div></div>
             <div className="grid-two"><Btn variant="secondary" onClick={share}>{copied ? 'Copied!' : 'Share result'}</Btn><Btn onClick={reset}>Run it back</Btn></div>
           </div>
@@ -451,8 +562,73 @@ function Chemistry({ chem, strength }) {
   return <div className="panel"><div className="label">Chemistry</div>{chem.lines.length === 0 && <div className="fineprint text-left">Four strangers in a server. No links.</div>}<div className="stack-sm">{chem.lines.map((l, i) => <div key={i} className="chem-line"><span>{l.label}</span><b className={l.v >= 0 ? 'positive' : 'negative'}>{l.v >= 0 ? '+' : ''}{l.v}</b></div>)}</div><div className="strength"><span>Team strength</span><b>{strength.toFixed(1)}</b></div></div>;
 }
 
+function SeasonHeader({ wins, losses, regularRecord, champsRecord, results, undefeated }) {
+  return (
+    <div className="season-header">
+      <div className="season-title">20–0</div>
+      <div className={`record ${undefeated ? 'perfect' : ''}`}>{wins}–{losses}</div>
+      <div className="season-meta-grid">
+        <div><span>Record</span><b>{wins}–{losses}</b></div>
+        <div><span>Regular Season</span><b>{regularRecord.wins}–{regularRecord.losses}</b></div>
+        {results.length > 16 && <div><span>Champs</span><b>{champsRecord.wins}–{champsRecord.losses}</b></div>}
+        <div><span>Current Phase</span><b>{currentPhaseLabel(results)}</b></div>
+      </div>
+      <div className={`eyebrow ${undefeated ? 'green' : ''}`}>{undefeated ? 'Still perfect' : 'The dream is dead — finish the job'}</div>
+    </div>
+  );
+}
+
+function formatStatsLine(playerStats) {
+  const topStats = playerStats.slice(0, 3);
+  if (topStats[0] && topStats[1] && topStats[0].kd >= 1.28 && topStats[0].kd - topStats[1].kd >= 0.16) {
+    return `${topStats[0].name} carried with a ${topStats[0].kd.toFixed(2)} KD`;
+  }
+  return topStats.map((p) => `${p.name} ${p.kd.toFixed(2)} KD`).join(' · ');
+}
+
+function ChampsDivider() {
+  return (
+    <div className="champs-divider">
+      <b>CHAMPS BEGINS</b>
+      <span>Four matches left. Finish the run.</span>
+    </div>
+  );
+}
+
+function ResultCard({ result }) {
+  return (
+    <div className={`result-row ${result.won ? 'win' : 'loss'} ${result.phase === 'champs' ? 'champs' : ''}`}>
+      <div className="result-topline">
+        <span>{result.phase === 'champs' ? `M${result.matchNumber} · ${result.roundLabel}` : result.roundLabel}</span>
+        <strong>{result.won ? 'W' : 'L'} vs {result.opp.org} '{String(result.opp.year).slice(2)}</strong>
+        <b>{result.w}–{result.l}</b>
+      </div>
+      <div className="kd-line">{formatStatsLine(result.playerStats)}</div>
+      {result.flavour && <div className="flavour-line">{result.flavour}</div>}
+    </div>
+  );
+}
+
 function ResultsList({ results, fixtures }) {
-  return <div className="results-list">{results.map((r, i) => <div key={i} className={`result-row ${r.won ? 'win' : 'loss'}`}><div><div className="result-opponent"><span>{i < 16 ? `M${i + 1}` : ['QF', 'SF', 'WF', 'GF'][i - 16]}</span><b style={{ color: r.opp.c.ac }}>{r.opp.org} '{String(r.opp.year).slice(2)}</b></div><div className="maps">{r.maps.map((m) => `${m.m} ${m.score}`).join(' · ')}</div></div><strong>{r.w}–{r.l}</strong></div>)}{results.length < fixtures.length && <div className="next-match">Next: {results.length < 16 ? `Match ${results.length + 1} of 16` : ['Champs Quarterfinal', 'Champs Semifinal', 'Winners Final', 'GRAND FINAL'][results.length - 16]} — {fixtures[results.length].org} '{String(fixtures[results.length].year).slice(2)}</div>}</div>;
+  const nextFixture = fixtures[results.length];
+  const nextMeta = nextFixture ? matchMeta(results.length) : null;
+  return (
+    <div className="results-list">
+      {results.map((r, i) => (
+        <React.Fragment key={r.matchNumber}>
+          {i === 16 && <ChampsDivider />}
+          <ResultCard result={r} />
+        </React.Fragment>
+      ))}
+      {results.length === 16 && <ChampsDivider />}
+      {nextFixture && (
+        <div className={`next-match ${nextMeta.phase === 'champs' ? 'champs' : ''}`}>
+          Next: {nextMeta.nextLabel} vs {nextFixture.org} '{String(nextFixture.year).slice(2)}
+          {results.length === 19 && <span>One series for the ring.</span>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 createRoot(document.getElementById('root')).render(<App />);
