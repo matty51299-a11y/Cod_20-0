@@ -1,0 +1,19 @@
+{
+  "name": "cod-20-0",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate:squads": "node scripts/generate-squads.mjs",
+    "prebuild": "npm run generate:squads",
+    "build": "vite build",
+    "dev": "vite --host 0.0.0.0",
+    "lint:data": "node scripts/validate-squads.mjs"
+  },
+  "dependencies": {
+    "vite": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {}
+}
