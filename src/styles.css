@@ -123,3 +123,20 @@ footer { color: #3a4452; font-size: 0.65rem; margin-top: 2.5rem; text-align: cen
 @media (max-width: 380px) {
   .season-meta-grid { grid-template-columns: 1fr; }
 }
+.summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; margin-bottom: 0.85rem; }
+.summary-grid div { border: 1px solid #2a3442; border-radius: 0.55rem; background: rgba(255,255,255,0.03); padding: 0.55rem 0.65rem; }
+.summary-grid span { display: block; color: #5c6b7f; font-size: 0.58rem; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; }
+.summary-grid b { display: block; color: #e5ebf2; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.82rem; margin-top: 0.2rem; }
+.achievement-block { border-top: 1px solid #2a3442; margin-top: 0.9rem; padding-top: 0.9rem; }
+.achievement-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.achievement-list span { border: 1px solid rgba(232, 180, 58, 0.42); border-radius: 999px; background: rgba(232, 180, 58, 0.12); color: #e8b43a; font-size: 0.68rem; font-weight: 900; padding: 0.3rem 0.5rem; }
+.hall { background: #10151d; }
+.hall-list { display: flex; flex-direction: column; gap: 0.45rem; }
+.hall-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.25rem 0.55rem; align-items: baseline; border-bottom: 1px solid rgba(42, 52, 66, 0.7); padding-bottom: 0.45rem; }
+.hall-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.hall-row b, .hall-row strong { color: #e8b43a; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.hall-row span { color: #e5ebf2; font-size: 0.78rem; font-weight: 850; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hall-row small { grid-column: 2 / -1; color: #7c8db0; font-size: 0.68rem; }
+@media (max-width: 380px) {
+  .summary-grid { grid-template-columns: 1fr; }
+}
