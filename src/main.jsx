@@ -53,7 +53,7 @@ const DIFFICULTIES = [
 ];
 
 
-const CHAMPS_ROUNDS = ['Champs Round 1', 'Champs Semi Final', 'Champs Final', 'Champs Grand Final'];
+const CHAMPS_ROUNDS = ['Champs Gauntlet 1', 'Champs Gauntlet 2', 'Champs Gauntlet 3', 'Final Boss'];
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 function matchMeta(index) {
@@ -71,7 +71,7 @@ function matchMeta(index) {
   return {
     matchNumber,
     phase: 'champs',
-    phaseLabel: 'Champs',
+    phaseLabel: 'Champs Gauntlet',
     roundLabel,
     nextLabel: roundLabel,
   };
@@ -86,6 +86,14 @@ function currentPhaseLabel(results) {
   if (results.length === 0) return 'Regular Season';
   if (results.length <= 16) return 'Regular Season';
   return matchMeta(results.length - 1).roundLabel;
+}
+
+function finalResultLabel(wins) {
+  if (wins === 20) return 'World Champions';
+  if (wins >= 18) return 'Historic Run';
+  if (wins >= 15) return 'Champs Contender';
+  if (wins >= 12) return 'Playoff Team';
+  return 'Rebuild Needed';
 }
 
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -376,11 +384,11 @@ function App() {
     const usedIds = ps.map((p) => p.squadId);
     const available = SQUADS.filter((s) => !usedIds.includes(s.id));
     const sorted = [...available].sort((a, b) => squadRating(b) - squadRating(a));
-    const champsBracket = sorted.slice(0, 8);
-    const regularPool = shuffle(available.filter((s) => !champsBracket.slice(0, 4).some((b) => b.id === s.id)));
+    const champsGauntletPool = sorted.slice(0, 8);
+    const regularPool = shuffle(available.filter((s) => !champsGauntletPool.slice(0, 4).some((b) => b.id === s.id)));
     const regular = regularPool.slice(0, 16);
-    const bracket = shuffle(champsBracket).slice(0, 4).sort((a, b) => squadRating(a) - squadRating(b));
-    setFixtures([...regular, ...bracket]);
+    const champsGauntlet = shuffle(champsGauntletPool).slice(0, 4).sort((a, b) => squadRating(a) - squadRating(b));
+    setFixtures([...regular, ...champsGauntlet]);
     setBogeyIdx(Math.floor(Math.random() * 16));
     setPhase('review');
   }
@@ -459,7 +467,7 @@ function App() {
   const undefeated = losses === 0;
   const regularRecord = recordFor(results.slice(0, 16));
   const champsRecord = recordFor(results.slice(16));
-  const phaseSimLabel = results.length < 16 ? 'Sim Regular Season' : 'Sim Champs';
+  const phaseSimLabel = results.length < 16 ? 'Sim Regular Season' : 'Sim Champs Gauntlet';
 
   return (
     <div className="app-shell">
@@ -472,7 +480,7 @@ function App() {
 
         {phase === 'setup' && (
           <div className="stack-lg">
-            <p className="intro">Draft a four-man roster from {databaseStats.first} to {databaseStats.last} competitive Call of Duty, using the squad and rating markdown databases in this repo. Survive a 16-match season and a four-round Champs bracket. Every player is rated for the specific year you draft them from.</p>
+            <p className="intro">Draft a four-man roster from {databaseStats.first} to {databaseStats.last} competitive Call of Duty, using the squad and rating markdown databases in this repo. Survive a 16-match regular season and a four-match Champs Gauntlet. Every player is rated for the specific year you draft them from.</p>
             <div className="database-note">{databaseStats.count} squad cards loaded from {DATA_SOURCES.join(' + ')}.</div>
             <div>
               <label className="label">Name your team</label>
@@ -511,7 +519,7 @@ function App() {
             <div className="text-center"><div className="section-title">{teamName || 'Your squad'}</div><div className="mono-muted">Coach {coach.n} · “{coach.t}”</div></div>
             <ReviewSlots slots={slots} />
             <Chemistry chem={chem} strength={teamEffective(picks, chem.total, coach)} />
-            <p className="fineprint">16 league matches, then a four-round Champs bracket. One opponent is your bogey team — you'll find out who at the end.</p>
+            <p className="fineprint">16 league matches, then a four-match Champs Gauntlet. One opponent is your bogey team — you'll find out who at the end.</p>
             <Btn onClick={() => setPhase('season')}>Start the season</Btn>
           </div>
         )}
@@ -532,7 +540,7 @@ function App() {
 
         {phase === 'result' && (
           <div className="stack-lg text-center">
-            <div><div className={`final-record ${losses === 0 ? 'perfect' : ''}`}>{wins}–{losses}</div><div className="result-label">{losses === 0 ? '20–0 · IMMORTAL' : results[19]?.won ? 'World Champions' : wins >= 16 ? 'Champs calibre — no ring' : wins >= 12 ? 'Playoff team' : wins >= 8 ? 'Mid-table' : 'Full rebuild'}</div>{results[19]?.won && losses > 0 && <p>You dropped maps along the way, but you won the one that matters.</p>}</div>
+            <div><div className={`final-record ${losses === 0 ? 'perfect' : ''}`}>{wins}–{losses}</div><div className="result-label">{finalResultLabel(wins)}</div></div>
             <div className="result-grid">{results.map((r, i) => <span key={i}>{r.won ? '🟩' : '🟥'}</span>)}</div>
             <div className="text-left"><div className="label">Season log</div><ResultsList results={results} fixtures={fixtures} /></div>
             <div className="panel text-left"><div className="label">Season review</div><div className="review-copy"><div>Squad: {picks.map((p) => `${p.n} '${String(p.year).slice(2)}`).join(', ')}</div><div>Coach: {coach.n} — “{coach.t}”</div><div>Bogey team: <b>{fixtures[bogeyIdx]?.org} '{String(fixtures[bogeyIdx]?.year).slice(2)}</b>{results[bogeyIdx] && !results[bogeyIdx].won ? ' — and they got you.' : ' — handled.'}</div>{best && <div>Best ever run: {best.wins}–{best.losses}</div>}</div></div>
@@ -570,7 +578,7 @@ function SeasonHeader({ wins, losses, regularRecord, champsRecord, results, unde
       <div className="season-meta-grid">
         <div><span>Record</span><b>{wins}–{losses}</b></div>
         <div><span>Regular Season</span><b>{regularRecord.wins}–{regularRecord.losses}</b></div>
-        {results.length > 16 && <div><span>Champs</span><b>{champsRecord.wins}–{champsRecord.losses}</b></div>}
+        {results.length > 16 && <div><span>Champs Gauntlet</span><b>{champsRecord.wins}–{champsRecord.losses}</b></div>}
         <div><span>Current Phase</span><b>{currentPhaseLabel(results)}</b></div>
       </div>
       <div className={`eyebrow ${undefeated ? 'green' : ''}`}>{undefeated ? 'Still perfect' : 'The dream is dead — finish the job'}</div>
@@ -589,8 +597,8 @@ function formatStatsLine(playerStats) {
 function ChampsDivider() {
   return (
     <div className="champs-divider">
-      <b>CHAMPS BEGINS</b>
-      <span>Four matches left. Finish the run.</span>
+      <b>CHAMPS GAUNTLET</b>
+      <span>Four final matches. Finish the run.</span>
     </div>
   );
 }
@@ -599,7 +607,7 @@ function ResultCard({ result }) {
   return (
     <div className={`result-row ${result.won ? 'win' : 'loss'} ${result.phase === 'champs' ? 'champs' : ''}`}>
       <div className="result-topline">
-        <span>{result.phase === 'champs' ? `M${result.matchNumber} · ${result.roundLabel}` : result.roundLabel}</span>
+        <span>{result.roundLabel}</span>
         <strong>{result.won ? 'W' : 'L'} vs {result.opp.org} '{String(result.opp.year).slice(2)}</strong>
         <b>{result.w}–{result.l}</b>
       </div>
@@ -624,7 +632,7 @@ function ResultsList({ results, fixtures }) {
       {nextFixture && (
         <div className={`next-match ${nextMeta.phase === 'champs' ? 'champs' : ''}`}>
           Next: {nextMeta.nextLabel} vs {nextFixture.org} '{String(nextFixture.year).slice(2)}
-          {results.length === 19 && <span>One series for the ring.</span>}
+          {results.length === 19 && <span>Final boss awaits.</span>}
         </div>
       )}
     </div>
