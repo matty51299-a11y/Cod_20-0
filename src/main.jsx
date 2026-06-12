@@ -54,6 +54,7 @@ const DIFFICULTIES = [
 
 
 const CHAMPS_ROUNDS = ['Champs Gauntlet 1', 'Champs Gauntlet 2', 'Champs Gauntlet 3', 'Final Boss'];
+const RUNS_STORAGE_KEY = 'cdl200-hall-of-runs';
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 function matchMeta(index) {
@@ -80,6 +81,10 @@ function matchMeta(index) {
 function recordFor(results) {
   const wins = results.filter((r) => r.won).length;
   return { wins, losses: results.length - wins };
+}
+
+function formatRecord(record) {
+  return `${record.wins}–${record.losses}`;
 }
 
 function currentPhaseLabel(results) {
@@ -218,6 +223,9 @@ function flavourForResult(result, previousResults) {
   const threeStraightLosses = withCurrent.slice(-3).length === 3 && withCurrent.slice(-3).every((r) => !r.won);
   const perfectStart = result.matchNumber === 3 && withCurrent.every((r) => r.won);
 
+  if (result.matchNumber === 20 && result.won) return 'Final Boss cleared.';
+  if (result.matchNumber === 20 && !result.won) return 'Final Boss failed.';
+  if (result.matchNumber === 17) return 'Champs Gauntlet begins.';
   if (threeStraightLosses) return 'Three straight defeats. Crisis.';
   if (firstLoss) return 'The perfect run is gone.';
   if (perfectStart) return 'Perfect start.';
@@ -234,21 +242,117 @@ function decorateResult(rawResult, picks, index, previousResults) {
   return { ...decorated, flavour: flavourForResult(decorated, previousResults) };
 }
 
-function loadBest() {
+function playerLabel(player) {
+  return `${player.n} '${String(player.year).slice(2)}`;
+}
+
+function averagePlayerKds(results) {
+  const totals = new Map();
+  results.forEach((result) => {
+    result.playerStats.forEach((stat) => {
+      const current = totals.get(stat.name) || { name: stat.name, total: 0, matches: 0 };
+      current.total += stat.kd;
+      current.matches += 1;
+      totals.set(stat.name, current);
+    });
+  });
+  return [...totals.values()]
+    .map((stat) => ({ name: stat.name, kd: Number((stat.total / stat.matches).toFixed(2)) }))
+    .sort((a, b) => b.kd - a.kd);
+}
+
+function resultMargin(result) {
+  return Math.abs(result.w - result.l);
+}
+
+function hasReverseSweep(result) {
+  return result.won && result.w === 3 && result.l === 2 && result.maps?.[0] && result.maps?.[1] && !result.maps[0].win && !result.maps[1].win;
+}
+
+function buildAchievements({ results, picks, teamStrength, regularRecord, champsRecord }) {
+  const finalRecord = recordFor(results);
+  const achievements = [];
+  const add = (name, unlocked) => { if (unlocked) achievements.push(name); };
+
+  add('Perfect Run', finalRecord.wins === 20);
+  add('Historic Run', finalRecord.wins >= 18);
+  add('Champs Sweep', champsRecord.wins === 4 && champsRecord.losses === 0);
+  add('No Superstars', finalRecord.wins >= 16 && picks.every((p) => p.r < 93));
+  add('Dirty Work', results.some((r) => r.won) && picks.some((p) => p.r <= 82));
+  add('Map Five Demon', results.filter((r) => r.won && r.w === 3 && r.l === 2).length >= 5);
+  add('Dynasty Killer', results.filter((r) => r.won && r.opp.tier === 'elite').length >= 3);
+  add('Bad Draft Hero', finalRecord.wins > finalRecord.losses && teamStrength < 87);
+  add('Reverse Sweep Energy', results.some(hasReverseSweep));
+  add('Final Boss Cleared', results[19]?.won === true);
+
+  return achievements;
+}
+
+function buildRunSummary({ results, picks, coach, teamName, teamStrength }) {
+  const finalRecord = recordFor(results);
+  const regularRecord = recordFor(results.slice(0, 16));
+  const champsRecord = recordFor(results.slice(16));
+  const bestPlayer = averagePlayerKds(results)[0] || null;
+  const wins = results.filter((r) => r.won);
+  const losses = results.filter((r) => !r.won);
+  const biggestWin = wins.length ? [...wins].sort((a, b) => resultMargin(b) - resultMargin(a) || b.w - a.w)[0] : null;
+  const worstLoss = losses.length ? [...losses].sort((a, b) => resultMargin(b) - resultMargin(a) || b.l - a.l)[0] : null;
+  const achievements = buildAchievements({ results, picks, teamStrength, regularRecord, champsRecord });
+
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    teamName: teamName || 'Unnamed',
+    finalRecord,
+    regularRecord,
+    champsRecord,
+    roster: picks.map(playerLabel),
+    coach: coach.n,
+    coachTitle: coach.t,
+    teamStrength: Number(teamStrength.toFixed(1)),
+    bestPlayer,
+    achievements,
+    verdict: finalResultLabel(finalRecord.wins),
+    worstLoss,
+    biggestWin,
+    date: new Date().toISOString(),
+  };
+}
+
+function loadHallRuns() {
   try {
-    const value = localStorage.getItem('cdl200-best');
-    return value ? JSON.parse(value) : null;
+    const value = localStorage.getItem(RUNS_STORAGE_KEY);
+    return value ? JSON.parse(value) : [];
   } catch {
-    return null;
+    return [];
   }
 }
 
-function saveBest(rec) {
+function rankRuns(runs) {
+  return [...runs].sort((a, b) => b.finalRecord.wins - a.finalRecord.wins || a.finalRecord.losses - b.finalRecord.losses || b.teamStrength - a.teamStrength || new Date(b.date) - new Date(a.date));
+}
+
+function saveHallRun(run) {
   try {
-    localStorage.setItem('cdl200-best', JSON.stringify(rec));
+    const next = rankRuns([run, ...loadHallRuns()]).slice(0, 10);
+    localStorage.setItem(RUNS_STORAGE_KEY, JSON.stringify(next));
+    return next;
   } catch {
-    // Storage can be blocked in private or embedded browsers.
+    return loadHallRuns();
   }
+}
+
+function copyText(text) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+  return Promise.resolve();
 }
 
 const RatingChip = ({ r, hidden }) => (
@@ -277,7 +381,8 @@ function App() {
   const [fixtures, setFixtures] = useState([]);
   const [results, setResults] = useState([]);
   const [bogeyIdx, setBogeyIdx] = useState(-1);
-  const [best, setBest] = useState(null);
+  const [hallRuns, setHallRuns] = useState([]);
+  const [completedRun, setCompletedRun] = useState(null);
   const [copied, setCopied] = useState(false);
   const [simmingAll, setSimmingAll] = useState(false);
   const spinTimer = useRef(null);
@@ -287,7 +392,7 @@ function App() {
     return { count: SQUADS.length, first: Math.min(...years), last: Math.max(...years) };
   }, []);
 
-  useEffect(() => { setBest(loadBest()); }, []);
+  useEffect(() => { setHallRuns(loadHallRuns()); }, []);
   useEffect(() => () => clearInterval(spinTimer.current), []);
 
   const picks = slots.filter(Boolean);
@@ -305,6 +410,7 @@ function App() {
     setSlots([null, null, null, null]);
     setRound(1);
     setResults([]);
+    setCompletedRun(null);
     setPhase('coach');
   }
 
@@ -436,20 +542,42 @@ function App() {
   }
 
   function endSeason(finalResults) {
-    const finalWins = finalResults.filter((r) => r.won).length;
-    const finalLosses = finalResults.length - finalWins;
-    const rec = { wins: finalWins, losses: finalLosses, name: teamName || 'Unnamed' };
-    if (!best || finalWins > best.wins) { setBest(rec); saveBest(rec); }
+    const run = buildRunSummary({
+      results: finalResults,
+      picks,
+      coach,
+      teamName,
+      teamStrength: teamEffective(picks, chem.total, coach),
+    });
+    const nextHall = saveHallRun(run);
+    setCompletedRun(run);
+    setHallRuns(nextHall);
     setTimeout(() => setPhase('result'), 600);
   }
 
+  function runSummaryText(run = completedRun) {
+    if (!run) return '';
+    const bestPlayerText = run.bestPlayer ? `${run.bestPlayer.name}, ${run.bestPlayer.kd.toFixed(2)} average KD` : 'N/A';
+    const achievementText = run.achievements.length ? run.achievements.join(', ') : 'None';
+    return [
+      '20-0: The All-Time CDL Gauntlet',
+      `${run.teamName} finished ${run.finalRecord.wins}-${run.finalRecord.losses}`,
+      `Regular Season: ${run.regularRecord.wins}-${run.regularRecord.losses}`,
+      `Champs Gauntlet: ${run.champsRecord.wins}-${run.champsRecord.losses}`,
+      '',
+      'Roster:',
+      ...run.roster,
+      '',
+      `Coach: ${run.coach}`,
+      `Best Player: ${bestPlayerText}`,
+      `Verdict: ${run.verdict}`,
+      `Achievements: ${achievementText}`,
+    ].join('\n');
+  }
+
   async function share() {
-    const finalWins = results.filter((r) => r.won).length;
-    const finalLosses = results.length - finalWins;
-    const grid = results.map((r) => (r.won ? '🟩' : '🟥')).join('');
-    const txt = `20-0: The All-Time CDL Gauntlet\n${teamName || 'My squad'}: ${picks.map((p) => `${p.n} '${String(p.year).slice(2)}`).join(', ')}\nCoach: ${coach.n}\nRecord: ${finalWins}-${finalLosses}\n${grid}`;
     try {
-      await navigator.clipboard.writeText(txt);
+      await copyText(runSummaryText());
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -459,7 +587,7 @@ function App() {
 
   function reset() {
     setPhase('setup'); setCoach(null); setSlots([null, null, null, null]);
-    setResults([]); setCurrent(null); setRound(0); setCopied(false);
+    setResults([]); setCurrent(null); setRound(0); setCopied(false); setCompletedRun(null);
   }
 
   const wins = results.filter((r) => r.won).length;
@@ -468,6 +596,8 @@ function App() {
   const regularRecord = recordFor(results.slice(0, 16));
   const champsRecord = recordFor(results.slice(16));
   const phaseSimLabel = results.length < 16 ? 'Sim Regular Season' : 'Sim Champs Gauntlet';
+  const bestRun = hallRuns[0];
+  const liveRun = completedRun || (results.length === fixtures.length && coach ? buildRunSummary({ results, picks, coach, teamName, teamStrength: teamEffective(picks, chem.total, coach) }) : null);
 
   return (
     <div className="app-shell">
@@ -475,7 +605,7 @@ function App() {
         <header className="header">
           <div className="title">20–0</div>
           <div className="subtitle">The All-Time CDL Gauntlet</div>
-          {best && phase === 'setup' && <div className="best">Best run: {best.wins}–{best.losses} ({best.name})</div>}
+          {bestRun && phase === 'setup' && <div className="best">Best run: {formatRecord(bestRun.finalRecord)} ({bestRun.teamName})</div>}
         </header>
 
         {phase === 'setup' && (
@@ -492,6 +622,7 @@ function App() {
                 {DIFFICULTIES.map((d) => <button key={d.id} onClick={() => setDiff(d)} className={`difficulty ${diff.id === d.id ? 'active' : ''}`}><span>{d.label}</span><small>{d.sub}</small></button>)}
               </div>
             </div>
+            <HallOfRuns runs={hallRuns} />
             <Btn onClick={startGame}>Take the job</Btn>
           </div>
         )}
@@ -538,17 +669,81 @@ function App() {
           </div>
         )}
 
-        {phase === 'result' && (
+        {phase === 'result' && liveRun && (
           <div className="stack-lg text-center">
-            <div><div className={`final-record ${losses === 0 ? 'perfect' : ''}`}>{wins}–{losses}</div><div className="result-label">{finalResultLabel(wins)}</div></div>
+            <div><div className={`final-record ${losses === 0 ? 'perfect' : ''}`}>{wins}–{losses}</div><div className="result-label">{liveRun.verdict}</div></div>
             <div className="result-grid">{results.map((r, i) => <span key={i}>{r.won ? '🟩' : '🟥'}</span>)}</div>
+            <RunReview run={liveRun} fixtures={fixtures} bogeyIdx={bogeyIdx} results={results} />
             <div className="text-left"><div className="label">Season log</div><ResultsList results={results} fixtures={fixtures} /></div>
-            <div className="panel text-left"><div className="label">Season review</div><div className="review-copy"><div>Squad: {picks.map((p) => `${p.n} '${String(p.year).slice(2)}`).join(', ')}</div><div>Coach: {coach.n} — “{coach.t}”</div><div>Bogey team: <b>{fixtures[bogeyIdx]?.org} '{String(fixtures[bogeyIdx]?.year).slice(2)}</b>{results[bogeyIdx] && !results[bogeyIdx].won ? ' — and they got you.' : ' — handled.'}</div>{best && <div>Best ever run: {best.wins}–{best.losses}</div>}</div></div>
-            <div className="grid-two"><Btn variant="secondary" onClick={share}>{copied ? 'Copied!' : 'Share result'}</Btn><Btn onClick={reset}>Run it back</Btn></div>
+            <HallOfRuns runs={hallRuns} />
+            <div className="grid-two"><Btn variant="secondary" onClick={share}>{copied ? 'Copied!' : 'Copy Run Summary'}</Btn><Btn onClick={reset}>Run it back</Btn></div>
           </div>
         )}
 
         <footer>Ratings and squads are generated from the local markdown database files.</footer>
+      </div>
+    </div>
+  );
+}
+
+
+function formatMatchSummary(result) {
+  if (!result) return 'None';
+  return `${result.won ? 'W' : 'L'} ${result.w}–${result.l} vs ${result.opp.org} '${String(result.opp.year).slice(2)}`;
+}
+
+function RunReview({ run, fixtures, bogeyIdx, results }) {
+  const bestPlayerText = run.bestPlayer ? `${run.bestPlayer.name}, ${run.bestPlayer.kd.toFixed(2)} average KD` : 'N/A';
+  return (
+    <div className="panel text-left">
+      <div className="label">Run summary</div>
+      <div className="summary-grid">
+        <div><span>Final record</span><b>{formatRecord(run.finalRecord)}</b></div>
+        <div><span>Regular season</span><b>{formatRecord(run.regularRecord)}</b></div>
+        <div><span>Champs Gauntlet</span><b>{formatRecord(run.champsRecord)}</b></div>
+        <div><span>Verdict</span><b>{run.verdict}</b></div>
+      </div>
+      <div className="review-copy">
+        <div>Roster: {run.roster.join(', ')}</div>
+        <div>Coach: {run.coach} — “{run.coachTitle}”</div>
+        <div>Team strength: {run.teamStrength.toFixed(1)}</div>
+        <div>Best player: {bestPlayerText}</div>
+        <div>Biggest win: {formatMatchSummary(run.biggestWin)}</div>
+        <div>Worst loss: {run.worstLoss ? formatMatchSummary(run.worstLoss) : 'None'}</div>
+        <div>Bogey team: <b>{fixtures[bogeyIdx]?.org} '{String(fixtures[bogeyIdx]?.year).slice(2)}</b>{results[bogeyIdx] && !results[bogeyIdx].won ? ' — and they got you.' : ' — handled.'}</div>
+      </div>
+      <AchievementList achievements={run.achievements} />
+    </div>
+  );
+}
+
+function AchievementList({ achievements }) {
+  return (
+    <div className="achievement-block">
+      <div className="label">Achievements earned</div>
+      {achievements.length ? (
+        <div className="achievement-list">{achievements.map((achievement) => <span key={achievement}>{achievement}</span>)}</div>
+      ) : (
+        <div className="fineprint text-left">No achievements this run. Spin it back.</div>
+      )}
+    </div>
+  );
+}
+
+function HallOfRuns({ runs }) {
+  if (!runs.length) return null;
+  return (
+    <div className="panel hall text-left">
+      <div className="label">Hall of Runs</div>
+      <div className="hall-list">
+        {runs.slice(0, 10).map((run, index) => (
+          <div key={run.id || `${run.teamName}-${run.date}`} className="hall-row">
+            <b>#{index + 1}</b>
+            <span>{run.teamName}</span>
+            <strong>{formatRecord(run.finalRecord)}</strong>
+            <small>{run.verdict} · {run.achievements.length} ach.</small>
+          </div>
+        ))}
       </div>
     </div>
   );
